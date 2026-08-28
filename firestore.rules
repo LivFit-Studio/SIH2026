@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email == 'bhushanmallick_it@tgpcet.com' || 
+        request.auth.token.admin == true
+      );
+    }
+
+    function isTeamMemberOrLeader(teamData) {
+      return isAuthenticated() && (
+        request.auth.token.email == teamData.leaderEmail
+      );
+    }
+
+    // Teams collection
+    match /teams/{teamId} {
+      allow read: if isAdmin() || (isAuthenticated() && (
+        resource.data.leaderEmail == request.auth.token.email
+      ));
+      allow write: if isAdmin() || (isAuthenticated() && (
+        resource.data.leaderEmail == request.auth.token.email
+      ));
+    }
+
+    // Verifications collection
+    match /verifications/{verificationId} {
+      allow read: if isAdmin() || (isAuthenticated() && (
+        resource.data.leaderEmail == request.auth.token.email
+      ));
+      allow create, update: if isAdmin() || (isAuthenticated() && (
+        request.resource.data.leaderEmail == request.auth.token.email
+      ));
+    }
+
+    // Email logs collection (Admin write/read)
+    match /emailLogs/{logId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
