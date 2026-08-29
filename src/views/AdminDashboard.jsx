@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import PdfViewerModal from '../components/PdfViewerModal';
+import { collection, query, getDocs, orderBy } from 'firebase/firestore';
+import { db } from '../firebase';
 import { 
   ShieldCheck, Users, CheckCircle2, AlertTriangle, Clock, Search, 
-  Mail, Send, RefreshCw, FileText, X, Eye, Check, User
+  Mail, Send, RefreshCw, FileText, X, Eye, Check, Activity, LogIn
 } from 'lucide-react';
 
 export default function AdminDashboard() {
@@ -25,8 +27,13 @@ export default function AdminDashboard() {
   const [emailLogs, setEmailLogs] = useState([]);
   const [emailNotice, setEmailNotice] = useState(null);
 
+  // Login Activity Audit State
+  const [activityLogs, setActivityLogs] = useState([]);
+  const [activitySearchTerm, setActivitySearchTerm] = useState('');
+
   useEffect(() => {
     fetchEmailLogs();
+    fetchActivityLogs();
   }, []);
 
   const fetchEmailLogs = async () => {
@@ -38,6 +45,50 @@ export default function AdminDashboard() {
       }
     } catch (err) {
       console.warn('Could not fetch server email logs:', err.message);
+    }
+  };
+
+  const fetchActivityLogs = async () => {
+    try {
+      // 1. Fetch from server API
+      const res = await fetch('/api/activity-logs');
+      let serverLogs = [];
+      if (res.ok) {
+        const data = await res.json();
+        if (data.logs) serverLogs = data.logs;
+      }
+
+      // 2. Fetch from Firestore loginActivity collection
+      let firestoreLogs = [];
+      try {
+        const q = query(collection(db, 'loginActivity'));
+        const querySnapshot = await getDocs(q);
+        if (!querySnapshot.empty) {
+          querySnapshot.forEach(docSnap => {
+            firestoreLogs.push({ id: docSnap.id, ...docSnap.data() });
+          });
+        }
+      } catch (err) {
+        console.warn('Firestore activity log fetch notice:', err.message);
+      }
+
+      // Merge & deduplicate by timestamp + email
+      const combined = [...serverLogs, ...firestoreLogs];
+      const unique = [];
+      const seen = new Set();
+      combined.forEach(item => {
+        const key = `${item.email}_${item.timestamp}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          unique.push(item);
+        }
+      });
+
+      // Sort newest first
+      unique.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setActivityLogs(unique);
+    } catch (err) {
+      console.warn('Error loading activity logs:', err.message);
     }
   };
 
@@ -55,6 +106,13 @@ export default function AdminDashboard() {
     return matchesSearch;
   });
 
+  const filteredActivityLogs = activityLogs.filter(act => 
+    act.email.toLowerCase().includes(activitySearchTerm.toLowerCase()) ||
+    (act.displayName && act.displayName.toLowerCase().includes(activitySearchTerm.toLowerCase())) ||
+    (act.teamName && act.teamName.toLowerCase().includes(activitySearchTerm.toLowerCase())) ||
+    (act.role && act.role.toLowerCase().includes(activitySearchTerm.toLowerCase()))
+  );
+
   const totalTeams = allTeams.length;
   const verifiedTeams = allTeams.filter(t => t.status === 'VERIFIED').length;
   const issueTeams = allTeams.filter(t => t.status === 'ISSUES_REPORTED').length;
@@ -62,7 +120,6 @@ export default function AdminDashboard() {
   const totalMembers = totalTeams * 6;
   const overallCompletion = Math.round(((verifiedTeams + issueTeams) / totalTeams) * 100) || 0;
 
-  // Open Email Modal for Single Leader or Bulk Leaders
   const handleOpenEmailModal = (teamsToMail) => {
     setEmailRecipients(teamsToMail);
     if (teamsToMail.length === 1) {
@@ -77,14 +134,12 @@ export default function AdminDashboard() {
     setEmailNotice(null);
   };
 
-  // Dispatch Email via Resend API Endpoint
   const handleSendEmails = async () => {
     setIsSendingEmail(true);
     setEmailNotice(null);
 
     try {
       if (emailRecipients.length === 1) {
-        // Single Leader Dispatch
         const leader = emailRecipients[0];
         const res = await fetch('/api/send-email', {
           method: 'POST',
@@ -107,7 +162,6 @@ export default function AdminDashboard() {
           setEmailNotice({ type: 'error', text: data.error || 'Failed to dispatch email.' });
         }
       } else {
-        // Bulk Leaders Dispatch
         const recipientsPayload = emailRecipients.map(t => ({
           email: t.leaderEmail,
           name: t.leaderName,
@@ -181,7 +235,7 @@ export default function AdminDashboard() {
             </span>
           </div>
           <h1 className="text-2xl font-bold text-white font-outfit mt-1">Student Council TGPCET - Verification Audit</h1>
-          <p className="text-xs text-slate-400">Manage 23 teams, review checklists, and send emails to team leaders via Resend API.</p>
+          <p className="text-xs text-slate-400">Manage 23 teams, track user login activity, and send emails via Resend API.</p>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -217,9 +271,9 @@ export default function AdminDashboard() {
           <div className="text-xl font-bold text-slate-200 font-outfit mt-1">{pendingTeams}</div>
         </div>
 
-        <div className="glass-card p-4 rounded-xl border border-slate-800">
-          <div className="text-[11px] font-semibold text-slate-400 uppercase">Total Members</div>
-          <div className="text-xl font-bold text-teal-300 font-outfit mt-1">{totalMembers}</div>
+        <div className="glass-card p-4 rounded-xl border border-blue-500/30 bg-blue-950/20">
+          <div className="text-[11px] font-semibold text-blue-400 uppercase">Logins Logged</div>
+          <div className="text-xl font-bold text-blue-300 font-outfit mt-1">{activityLogs.length}</div>
         </div>
 
         <div className="glass-card p-4 rounded-xl border border-teal-500/30 bg-teal-950/20">
@@ -256,7 +310,7 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Teams Management Table */}
+      {/* Master Teams Management Table */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
         <div className="overflow-x-auto">
           <table className="w-full text-xs text-left text-slate-300">
@@ -311,7 +365,6 @@ export default function AdminDashboard() {
                       <Eye className="w-3.5 h-3.5 inline" />
                     </button>
 
-                    {/* Single Leader Email Trigger */}
                     <button
                       onClick={() => handleOpenEmailModal([team])}
                       className="px-2.5 py-1 bg-teal-500/20 hover:bg-teal-500 hover:text-slate-950 text-teal-300 font-bold rounded border border-teal-500/30 transition flex items-center space-x-1 inline-flex"
@@ -326,6 +379,73 @@ export default function AdminDashboard() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* USER LOGIN ACTIVITY LOG SECTION */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+          <div className="flex items-center space-x-2 text-white font-bold text-sm">
+            <Activity className="w-4 h-4 text-blue-400" />
+            <span>User Login Activity Audit Log ({activityLogs.length})</span>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <div className="relative w-48 sm:w-64">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+              <input
+                type="text"
+                placeholder="Filter by email, name, team..."
+                value={activitySearchTerm}
+                onChange={(e) => setActivitySearchTerm(e.target.value)}
+                className="w-full pl-8 pr-2.5 py-1 bg-slate-950 border border-slate-700/80 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none"
+              />
+            </div>
+
+            <button onClick={fetchActivityLogs} className="text-xs text-teal-300 hover:text-teal-200 flex items-center space-x-1 bg-slate-800 px-2 py-1 rounded border border-slate-700">
+              <RefreshCw className="w-3 h-3" />
+              <span>Refresh Log</span>
+            </button>
+          </div>
+        </div>
+
+        {activityLogs.length === 0 ? (
+          <div className="text-xs text-slate-400 text-center py-6">
+            No login activity recorded yet. Whenever team leaders or admins log in via Google Sign-In, events will automatically register here.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left text-slate-300">
+              <thead className="bg-slate-950 text-slate-400 uppercase font-semibold">
+                <tr>
+                  <th className="px-3 py-2">Timestamp</th>
+                  <th className="px-3 py-2">User Name</th>
+                  <th className="px-3 py-2">Email Address</th>
+                  <th className="px-3 py-2">Assigned Role</th>
+                  <th className="px-3 py-2">Nominated Team</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800 font-mono text-[11px]">
+                {filteredActivityLogs.map((act, idx) => (
+                  <tr key={idx} className="hover:bg-slate-800/40">
+                    <td className="px-3 py-2 text-slate-400">{new Date(act.timestamp).toLocaleString()}</td>
+                    <td className="px-3 py-2 font-sans font-bold text-white">{act.displayName}</td>
+                    <td className="px-3 py-2 text-amber-300 font-bold">{act.email}</td>
+                    <td className="px-3 py-2">
+                      {act.role === 'admin' ? (
+                        <span className="bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded font-bold">ADMIN</span>
+                      ) : act.role === 'team_leader' ? (
+                        <span className="bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded font-bold">TEAM LEADER</span>
+                      ) : (
+                        <span className="bg-red-500/20 text-red-300 px-2 py-0.5 rounded font-bold">UNAUTHORIZED</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 font-sans text-slate-200">{act.teamName || 'N/A'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Resend Email History Audit Log */}
@@ -407,7 +527,6 @@ export default function AdminDashboard() {
                 </div>
 
                 <div className="flex items-center space-x-2">
-                  {/* Action: Send Mail to Single Leader */}
                   <button
                     onClick={() => {
                       const t = inspectTeam;
@@ -437,7 +556,6 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              {/* Members */}
               <div>
                 <h4 className="font-bold text-slate-300 uppercase tracking-wider mb-2">Team Member List (6 Members)</h4>
                 <div className="border border-slate-800 rounded-xl overflow-hidden">
@@ -469,7 +587,7 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* Resend Email Modal (Single Leader or Bulk) */}
+      {/* Resend Email Modal */}
       {isEmailModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
           <div className="bg-slate-900 border border-teal-500/40 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden">

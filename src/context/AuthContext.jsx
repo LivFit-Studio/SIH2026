@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { auth, googleProvider, db } from '../firebase';
 import { signInWithPopup, signOut as firebaseSignOut, onAuthStateChanged } from 'firebase/auth';
-import { doc, setDoc, collection, query, getDocs } from 'firebase/firestore';
+import { doc, setDoc, collection, query, getDocs, addDoc } from 'firebase/firestore';
 import { TEAMS_DATA, ADMIN_EMAILS } from '../data/teamsDataset';
 
 const AuthContext = createContext();
@@ -51,8 +51,8 @@ export function AuthProvider({ children }) {
     return () => unsubscribe();
   }, [allTeams]);
 
-  // Process logged in user
-  const processUserAuth = (email, firebaseUser) => {
+  // Process logged in user and record activity
+  const processUserAuth = async (email, firebaseUser) => {
     setLoading(true);
     const normalizedEmail = email.toLowerCase().trim();
 
@@ -75,10 +75,13 @@ export function AuthProvider({ children }) {
 
     setCurrentUser(activeUserObj);
 
+    let assignedRole = 'unauthorized';
     if (isAdmin) {
+      assignedRole = 'admin';
       setUserRole('admin');
       setUserTeam(matchedTeam || allTeams[0]);
     } else if (matchedTeam) {
+      assignedRole = 'team_leader';
       setUserRole('team_leader');
       setUserTeam(matchedTeam);
     } else {
@@ -87,6 +90,38 @@ export function AuthProvider({ children }) {
     }
 
     setLoading(false);
+
+    // Record Login Activity Event to Backend API & Firestore
+    recordLoginActivity(activeUserObj, assignedRole, matchedTeam);
+  };
+
+  const recordLoginActivity = async (userObj, role, matchedTeam) => {
+    const activityPayload = {
+      email: userObj.email,
+      displayName: userObj.displayName,
+      role: role,
+      teamName: matchedTeam ? matchedTeam.teamName : 'N/A',
+      teamId: matchedTeam ? matchedTeam.id : 'N/A',
+      timestamp: new Date().toISOString()
+    };
+
+    // 1. Post to Express Server
+    try {
+      await fetch('/api/log-activity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(activityPayload)
+      });
+    } catch (err) {
+      console.warn('Activity log server notice:', err.message);
+    }
+
+    // 2. Save to Firestore loginActivity collection
+    try {
+      await addDoc(collection(db, 'loginActivity'), activityPayload);
+    } catch (err) {
+      console.warn('Activity log firestore notice:', err.message);
+    }
   };
 
   // Google Sign-In

@@ -19,8 +19,9 @@ const resend = new Resend(RESEND_API_KEY);
 const PRIMARY_SENDER = 'Student Council TGPCET SIH 2026 <sih@tgpcet.site>';
 const FALLBACK_SENDER = 'Student Council TGPCET SIH 2026 <onboarding@resend.dev>';
 
-// Server Email Audit Logs
+// Server Audit Logs
 const serverEmailLogs = [];
+const serverActivityLogs = [];
 
 // Helper HTML template for Student Council TGPCET SIH 2026 verification emails
 function generateVerificationEmailHtml({ recipientName, teamName, portalUrl, customMessage }) {
@@ -113,7 +114,6 @@ async function dispatchResendEmail({ recipientEmail, recipientName, teamName, su
   };
 
   try {
-    // Attempt dispatch with primary sender sih@tgpcet.site
     let result = await resend.emails.send({
       from: PRIMARY_SENDER,
       to: [recipientEmail],
@@ -121,7 +121,6 @@ async function dispatchResendEmail({ recipientEmail, recipientName, teamName, su
       html,
     });
 
-    // If domain verification error, retry with fallback sender
     if (result.error && (result.error.message.includes('domain') || result.error.message.includes('validation'))) {
       result = await resend.emails.send({
         from: FALLBACK_SENDER,
@@ -136,11 +135,9 @@ async function dispatchResendEmail({ recipientEmail, recipientName, teamName, su
       logEntry.status = 'DELIVERED';
       logEntry.resendId = result.data.id;
     } else {
-      // Record API error message or fallback status
       logEntry.status = result.error ? 'FAILED' : 'DELIVERED';
       logEntry.error = result.error ? result.error.message : null;
       if (result.error && result.error.message.includes('invalid')) {
-        // Fallback simulation when API key is invalid or revoked
         logEntry.status = 'DELIVERED (SIMULATED)';
         logEntry.resendId = 'sim_' + Date.now();
       }
@@ -163,6 +160,34 @@ app.get('/api/health', (req, res) => {
 // GET Email Audit Logs
 app.get('/api/email-logs', (req, res) => {
   res.json({ success: true, logs: serverEmailLogs });
+});
+
+// GET Login Activity Logs
+app.get('/api/activity-logs', (req, res) => {
+  res.json({ success: true, logs: serverActivityLogs });
+});
+
+// POST Record User Login Activity
+app.post('/api/log-activity', (req, res) => {
+  const { email, displayName, role, teamName, teamId } = req.body;
+  
+  if (!email) {
+    return res.status(400).json({ success: false, error: 'User email is required' });
+  }
+
+  const activityEntry = {
+    id: 'act_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    email,
+    displayName: displayName || email.split('@')[0],
+    role: role || 'user',
+    teamName: teamName || 'N/A',
+    teamId: teamId || 'N/A',
+    timestamp: new Date().toISOString(),
+    userAgent: req.headers['user-agent'] || 'Browser'
+  };
+
+  serverActivityLogs.unshift(activityEntry);
+  res.json({ success: true, activity: activityEntry });
 });
 
 // POST Send Single Email to Team Leader
@@ -203,5 +228,5 @@ app.post('/api/send-bulk-email', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Student Council TGPCET SIH 2026 Server running on http://localhost:${PORT}`);
-  console.log(`Resend Sender configured: ${PRIMARY_SENDER}`);
+  console.log(`Activity Logging Engine Enabled.`);
 });
